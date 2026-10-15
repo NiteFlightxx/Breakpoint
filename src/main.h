@@ -1,4 +1,7 @@
 #include <iostream>
+#include <filesystem>
+#include <stdexcept>
+#include <string>
 
 #include "Support/WinInclude.h"
 #include "Support/ComPointer.h"
@@ -30,13 +33,40 @@ static bool useGridVolume = true;
 static bool renderGrid = false;
 static bool renderSpawn = false;
 
-const char* modes[] = { "Mesh Shaded Fluid, Non-Fluid Particles", "Mesh Shaded Fluid, All Particles", "No Mesh Shaded Fluid, All Particles" };
-const char* meshModes[] = { "Realistic", "Meshlets", "Toon Shaded" };
+const char* modes[] = { "流体表面 + 其他粒子", "流体表面 + 全部粒子", "仅显示全部粒子" };
+const char* meshModes[] = { "写实", "网格块", "卡通" };
+
+void loadChineseUIFont(ImGuiIO& io) {
+    // 使用 Windows 自带字体，不在仓库中分发系统字体。ImGui 接收 UTF-8 文件路径。
+    wchar_t windowsDirectory[MAX_PATH];
+    const UINT directoryLength = GetWindowsDirectoryW(windowsDirectory, MAX_PATH);
+    if (directoryLength == 0 || directoryLength >= MAX_PATH) {
+        throw std::runtime_error("Cannot locate the Windows directory for the Chinese UI font.");
+    }
+
+    const auto fontsDirectory = std::filesystem::path(windowsDirectory) / L"Fonts";
+    for (const wchar_t* fontName : { L"msyh.ttc", L"simhei.ttf", L"simsun.ttc" }) {
+        const auto fontPath = fontsDirectory / fontName;
+        if (!std::filesystem::exists(fontPath)) {
+            continue;
+        }
+        const auto utf8Path = fontPath.u8string();
+        const std::string filename(utf8Path.begin(), utf8Path.end());
+        ImFont* font = io.Fonts->AddFontFromFileTTF(
+            filename.c_str(), 18.0f, nullptr, io.Fonts->GetGlyphRangesChineseFull());
+        if (font != nullptr) {
+            io.FontDefault = font;
+            return;
+        }
+    }
+    throw std::runtime_error("No Chinese UI font found. Install Microsoft YaHei, SimHei or SimSun.");
+}
 
 ImGuiIO& initImGUI(DXContext& context) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
+    loadChineseUIFont(io);
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
 
@@ -76,59 +106,62 @@ void drawImGUIWindow(PBMPMConstants& pbmpmConstants, ImGuiIO& io,
 	float* sandIsovalue, float* sandKernelScale, float* sandKernelRadius,
 	float* viscoIsovalue, float* viscoKernelScale, float* viscoKernelRadius,
     unsigned int* substepCount, int numParticles) {
-    ImGui::Begin("Scene Options");
+    // ### 后使用稳定英文 ID，使后续文案调整不再改变窗口和控件身份。
+    ImGui::SetNextWindowSize(ImVec2(480, 640), ImGuiCond_FirstUseEver);
+    ImGui::Begin("场景选项###Scene Options");
+    ImGui::PushItemWidth(-170.0f);
 
-    ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
-    ImGui::Text("Number of Particles: %d", numParticles);
+    ImGui::Text("平均帧耗时：%.3f 毫秒（%.1f 帧/秒）", 1000.0f / io.Framerate, io.Framerate);
+    ImGui::Text("粒子数量：%d", numParticles);
 
-    if (ImGui::CollapsingHeader("Simulation Parameters")) {
-        ImGui::SliderFloat("Gravity Strength", &pbmpmConstants.gravityStrength, 0.0f, 20.0f);
-        ImGui::SliderFloat("Liquid Relaxation", &pbmpmConstants.liquidRelaxation, 0.0f, 10.0f);
-        ImGui::SliderFloat("Liquid Viscosity", &pbmpmConstants.liquidViscosity, 0.0f, 1.0f);
-        ImGui::SliderFloat("Friction Angle", &pbmpmConstants.frictionAngle, 0.0f, 90.0f);
+    if (ImGui::CollapsingHeader("模拟参数###Simulation Parameters")) {
+        ImGui::SliderFloat("重力强度###Gravity Strength", &pbmpmConstants.gravityStrength, 0.0f, 20.0f);
+        ImGui::SliderFloat("液体松弛系数###Liquid Relaxation", &pbmpmConstants.liquidRelaxation, 0.0f, 10.0f);
+        ImGui::SliderFloat("液体黏性###Liquid Viscosity", &pbmpmConstants.liquidViscosity, 0.0f, 1.0f);
+        ImGui::SliderFloat("内摩擦角###Friction Angle", &pbmpmConstants.frictionAngle, 0.0f, 90.0f);
 
-        ImGui::SliderFloat("Elastic Relaxation", &pbmpmConstants.elasticRelaxation, 0.0f, 3.0f);
-        ImGui::SliderFloat("Elastic Ratio", &pbmpmConstants.elasticityRatio, 0.0f, 4.0f);
+        ImGui::SliderFloat("弹性松弛系数###Elastic Relaxation", &pbmpmConstants.elasticRelaxation, 0.0f, 3.0f);
+        ImGui::SliderFloat("弹性混合比例###Elastic Ratio", &pbmpmConstants.elasticityRatio, 0.0f, 4.0f);
 
-        ImGui::SliderFloat("Sand Relaxation", &pbmpmConstants.sandRelaxation, 0.0f, 3.0f);
-        ImGui::SliderFloat("Sand Ratio", &pbmpmConstants.sandRatio, 0.0f, 2.0f);
+        ImGui::SliderFloat("沙体松弛系数###Sand Relaxation", &pbmpmConstants.sandRelaxation, 0.0f, 3.0f);
+        ImGui::SliderFloat("沙体混合比例###Sand Ratio", &pbmpmConstants.sandRatio, 0.0f, 2.0f);
 
-        ImGui::SliderInt("Particles Per Cell Axis", (int*)&pbmpmConstants.particlesPerCellAxis, 1, 8);
-        ImGui::SliderInt("Fixed Point Multiplier", (int*)&fixedPointExponent, 4, 13);
+        ImGui::SliderInt("每单元每轴粒子数###Particles Per Cell Axis", (int*)&pbmpmConstants.particlesPerCellAxis, 1, 8);
+        ImGui::SliderInt("定点倍率指数###Fixed Point Multiplier", (int*)&fixedPointExponent, 4, 13);
         pbmpmConstants.fixedPointMultiplier = (unsigned int)pow(10, fixedPointExponent);
 
-        ImGui::SliderFloat("Border Friction", &pbmpmConstants.borderFriction, 0.0f, 1.0f);
+        ImGui::SliderFloat("边界摩擦###Border Friction", &pbmpmConstants.borderFriction, 0.0f, 1.0f);
 
-        ImGui::SliderInt("Iteration Count", (int*)&pbmpmConstants.iterationCount, 1, 10);
-        ImGui::SliderInt("Substep Count", (int*)substepCount, 1, 20);
+        ImGui::SliderInt("迭代次数###Iteration Count", (int*)&pbmpmConstants.iterationCount, 1, 10);
+        ImGui::SliderInt("子步数量###Substep Count", (int*)substepCount, 1, 20);
 
-        ImGui::SliderFloat("Mouse Radius", &pbmpmConstants.mouseRadius, 0.1f, 10.f);
-        ImGui::SliderFloat("Mouse Strength", &pbmpmConstants.mouseStrength, 0.f, 40.f);
+        ImGui::SliderFloat("鼠标作用半径###Mouse Radius", &pbmpmConstants.mouseRadius, 0.1f, 10.f);
+        ImGui::SliderFloat("鼠标作用强度###Mouse Strength", &pbmpmConstants.mouseStrength, 0.f, 40.f);
 
-        ImGui::Checkbox("Use Grid Volume for Liquid", (bool*)&useGridVolume);
+        ImGui::Checkbox("液体使用网格体积###Use Grid Volume for Liquid", (bool*)&useGridVolume);
         pbmpmConstants.useGridVolumeForLiquid = useGridVolume;
     }
 
-    if (ImGui::CollapsingHeader("Mesh Shading Parameters")) {
-        if (ImGui::CollapsingHeader("Fluid Shading Parameters")) {
-            ImGui::SliderFloat("Fluid Isovalue", fluidIsovalue, 0.01f, 3.0f);
-            ImGui::SliderFloat("Fluid Kernel Scale", fluidKernelScale, 0.0f, 12.0f);
-            ImGui::SliderFloat("Fluid Kernel Radius", fluidKernelRadius, 0.0f, 5.0f);
+    if (ImGui::CollapsingHeader("表面重建参数###Mesh Shading Parameters")) {
+        if (ImGui::CollapsingHeader("流体表面###Fluid Shading Parameters")) {
+            ImGui::SliderFloat("流体等值面阈值###Fluid Isovalue", fluidIsovalue, 0.01f, 3.0f);
+            ImGui::SliderFloat("流体核缩放###Fluid Kernel Scale", fluidKernelScale, 0.0f, 12.0f);
+            ImGui::SliderFloat("流体核半径###Fluid Kernel Radius", fluidKernelRadius, 0.0f, 5.0f);
         }
-        if (ImGui::CollapsingHeader("Elastic Shading Parameters")) {
-            ImGui::SliderFloat("Elastic Isovalue", elasticIsovalue, 0.01f, 3.0f);
-            ImGui::SliderFloat("Elastic Kernel Scale", elasticKernelScale, 0.0f, 12.0f);
-            ImGui::SliderFloat("Elastic Kernel Radius", elasticKernelRadius, 0.0f, 5.0f);
+        if (ImGui::CollapsingHeader("弹性体表面###Elastic Shading Parameters")) {
+            ImGui::SliderFloat("弹性体等值面阈值###Elastic Isovalue", elasticIsovalue, 0.01f, 3.0f);
+            ImGui::SliderFloat("弹性体核缩放###Elastic Kernel Scale", elasticKernelScale, 0.0f, 12.0f);
+            ImGui::SliderFloat("弹性体核半径###Elastic Kernel Radius", elasticKernelRadius, 0.0f, 5.0f);
         }
-        if (ImGui::CollapsingHeader("Sand Shading Parameters")) {
-			ImGui::SliderFloat("Sand Isovalue", sandIsovalue, 0.01f, 3.0f);
-			ImGui::SliderFloat("Sand Kernel Scale", sandKernelScale, 0.0f, 12.0f);
-			ImGui::SliderFloat("Sand Kernel Radius", sandKernelRadius, 0.0f, 5.0f);
+        if (ImGui::CollapsingHeader("沙体表面###Sand Shading Parameters")) {
+			ImGui::SliderFloat("沙体等值面阈值###Sand Isovalue", sandIsovalue, 0.01f, 3.0f);
+			ImGui::SliderFloat("沙体核缩放###Sand Kernel Scale", sandKernelScale, 0.0f, 12.0f);
+			ImGui::SliderFloat("沙体核半径###Sand Kernel Radius", sandKernelRadius, 0.0f, 5.0f);
 		}
-        if (ImGui::CollapsingHeader("Viscoelastic Shading Parameters")) {
-            ImGui::SliderFloat("Visco Isovalue", viscoIsovalue, 0.01f, 3.0f);
-            ImGui::SliderFloat("Visco Kernel Scale", viscoKernelScale, 0.0f, 12.0f);
-            ImGui::SliderFloat("Visco Kernel Radius", viscoKernelRadius, 0.0f, 5.0f);
+        if (ImGui::CollapsingHeader("黏塑性材料表面###Viscoelastic Shading Parameters")) {
+            ImGui::SliderFloat("黏塑性等值面阈值###Visco Isovalue", viscoIsovalue, 0.01f, 3.0f);
+            ImGui::SliderFloat("黏塑性核缩放###Visco Kernel Scale", viscoKernelScale, 0.0f, 12.0f);
+            ImGui::SliderFloat("黏塑性核半径###Visco Kernel Radius", viscoKernelRadius, 0.0f, 5.0f);
         }
 		//if (ImGui::CollapsingHeader("Snow Shading Parameters")) {
 		//	ImGui::SliderFloat("Snow Isovalue", snowIsovalue, 0.01f, 3.0f);
@@ -137,23 +170,24 @@ void drawImGUIWindow(PBMPMConstants& pbmpmConstants, ImGuiIO& io,
 		//}
     }
 
-    if (ImGui::CollapsingHeader("Render Parameters")) {
+    if (ImGui::CollapsingHeader("显示参数###Render Parameters")) {
 
-        ImGui::Combo("Select Render Mode", (int*)&renderModeType, modes, IM_ARRAYSIZE(modes));
+        ImGui::Combo("显示方式###Select Render Mode", (int*)&renderModeType, modes, IM_ARRAYSIZE(modes));
 
         if (renderModeType != 2) {
-            ImGui::Combo("Select Mesh Mode", (int*)&meshletRenderType, meshModes, IM_ARRAYSIZE(meshModes));
+            ImGui::Combo("表面风格###Select Mesh Mode", (int*)&meshletRenderType, meshModes, IM_ARRAYSIZE(meshModes));
         }
 
         if (meshletRenderType == 2) {
-			ImGui::SliderInt("Toon Shading Levels", (int*)&toonShadingLevels, 1, 10);
+			ImGui::SliderInt("卡通色阶数量###Toon Shading Levels", (int*)&toonShadingLevels, 1, 10);
         }
 
-        ImGui::Checkbox("Render Grid", &renderGrid);
+        ImGui::Checkbox("显示网格###Render Grid", &renderGrid);
 
-        ImGui::Checkbox("Render Spawners", &renderSpawn);
+        ImGui::Checkbox("显示发射区域###Render Spawners", &renderSpawn);
     }
 
+    ImGui::PopItemWidth();
     ImGui::End();
 }
 
